@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "com.jegly.offlineLLM"
-        minSdk = 33
+        minSdk = 35
         targetSdk = 37
         // CI release builds pass these; local builds use the defaults.
         versionCode = providers.gradleProperty("appVersionCode").map(String::toInt).getOrElse(11)
