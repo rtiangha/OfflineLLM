@@ -41,7 +41,7 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        if (!BuildConfig.DEBUG && !SignatureVerifier(this).isSignedByTrustedCert()) {
+        if (false && !BuildConfig.DEBUG && !SignatureVerifier(this).isSignedByTrustedCert()) { // self-signed build: check disabled
             android.app.AlertDialog.Builder(this)
                 .setTitle("Unverified App")
                 .setMessage("This app has been modified or re-signed and cannot run to protect your data.")

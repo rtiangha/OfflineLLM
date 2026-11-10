@@ -16,7 +16,7 @@ val sdkDir: String = rootProject.file("local.properties")
 // are each referenced from several places below (ndkVersion, the glslc path, the
 // ninja path, the AGP cmake block), and those drifting apart silently produces a
 // path to a directory that no longer exists.
-val ndkVersionPinned = "27.2.12479018"
+val ndkVersionPinned = "30.0.16248370"
 
 // Newest CMake present in the SDK, so installing a newer one from the SDK Manager
 // is picked up without editing this file. llama.cpp declares
@@ -49,8 +49,8 @@ val vulkanHostToolchain: File =
         writeText(
             """
             set(CMAKE_BUILD_TYPE Release)
-            set(CMAKE_C_FLAGS -O2)
-            set(CMAKE_CXX_FLAGS -O2)
+            set(CMAKE_C_FLAGS -O3)
+            set(CMAKE_CXX_FLAGS -O3)
             set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
             set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY NEVER)
             set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE NEVER)
@@ -66,7 +66,7 @@ android {
     ndkVersion = ndkVersionPinned
 
     defaultConfig {
-        minSdk = 33
+        minSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
         ndk {
@@ -74,7 +74,7 @@ android {
         }
         externalNativeBuild {
             cmake {
-                cppFlags += listOf("-O3")
+                cppFlags += listOf("-O3 -march=armv8.2-a+crypto+dotprod+fp16+rcpc")
                 // The SPIRV include dir is passed as a cache var further down
                 // (-DSPIRV_HEADERS_INCLUDE_DIR) and consumed in our CMakeLists, rather
                 // than pushed through cppFlags — cppFlags becomes CMAKE_CXX_FLAGS, which

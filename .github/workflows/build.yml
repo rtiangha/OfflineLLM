@@ -19,7 +19,7 @@ concurrency:
 jobs:
   build:
     name: Assemble release (unsigned)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
@@ -52,9 +52,22 @@ jobs:
 
       - run: ./gradlew :app:assembleRelease
 
+      - name: Sign app APK
+        uses: kevin-david/zipalign-sign-android-release@v2
+        id: sign_app 
+        with: 
+          releaseDirectory: app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.DROID_KEYSTORE_B64 }}
+          alias: ${{ secrets.DROID_KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.DROID_KEYSTORE_PASS }}
+          keyPassword: ${{ secrets.DROID_KEY_PASS }}
+          zipAlign: true
+        env:
+          BUILD_TOOLS_VERSION: "37.0.0"
+
       - uses: actions/upload-artifact@v7
         with:
           name: release-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: app/build/outputs/apk/release/*-signed.apk
           if-no-files-found: error
           retention-days: 14
