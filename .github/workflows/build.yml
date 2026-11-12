@@ -26,6 +26,11 @@ jobs:
         with:
           submodules: recursive # llama.cpp + libadrenotools (+ its linkernsbypass)
 
+      - name: Upgrade system gcc
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: gcc-16
+
       # libadrenotools: make ggml-vulkan able to start from a custom (Turnip) driver.
       - name: Patch ggml-vulkan for libadrenotools
         run: python3 scripts/patch_ggml_vulkan.py llama.cpp/ggml/src/ggml-vulkan/ggml-vulkan.cpp
