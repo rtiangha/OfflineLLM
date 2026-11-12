@@ -26,6 +26,7 @@ class ModelManager(
     init {
         // Remember the GPU toggle as it was when the app started, so Settings can offer a restart after a change.
         if (GpuDriverManager.appliedUseGpu == null) GpuDriverManager.appliedUseGpu = settingsRepository.useGpu
+        if (GpuDriverManager.appliedUseVkCache == null) GpuDriverManager.appliedUseVkCache = settingsRepository.useVulkanCache
     }
 
     private val _copyProgress = MutableStateFlow(0f)
@@ -210,7 +211,10 @@ class ModelManager(
 
     private fun ensureBackendsLoaded() {
         synchronized(backendLock) {
-            if (GpuDriverManager.appliedDriverId == null) applyGpuDriverSelection()
+            if (GpuDriverManager.appliedDriverId == null) {
+                applyGpuDriverSelection()
+                setupPipelineCacheDir()
+            }
             inferenceEngine.initBackends(context.applicationInfo.nativeLibraryDir ?: "")
             autoDetectQuirks()
         }
@@ -222,6 +226,30 @@ class ModelManager(
      * CPU. The result is remembered per driver and device; a check that crashed is never repeated.
      * Skipped when the user already lists Q6_K, or sets OFFLINELLM_NO_AUTO_QUIRKS.
      */
+    private fun pipelineCacheDir(): File = File(context.cacheDir, "vk-pipeline-cache")
+
+    /**
+     * Points the Vulkan backend at a folder for its pipeline cache (compiled GPU programs), so later
+     * launches skip most shader compilation. Only when the "Vulkan Cache" switch is on (off by default);
+     * OFFLINELLM_VK_NO_PIPELINE_CACHE forces it off.
+     */
+    private fun setupPipelineCacheDir() {
+        if (!settingsRepository.useVulkanCache) return
+        if (Os.getenv("OFFLINELLM_VK_NO_PIPELINE_CACHE") != null) return
+        val dir = pipelineCacheDir().apply { mkdirs() }
+        Os.setenv("OFFLINELLM_VK_PIPELINE_CACHE_DIR", dir.absolutePath, true)
+    }
+
+    /** Total size of the saved Vulkan pipeline cache files, in bytes. */
+    fun pipelineCacheSizeBytes(): Long =
+        pipelineCacheDir().listFiles()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
+
+    /** Deletes all saved Vulkan pipeline caches; the cache starts rebuilding after an app restart. */
+    fun clearPipelineCache() {
+        inferenceEngine.clearPipelineCache()
+        pipelineCacheDir().listFiles()?.forEach { it.delete() }
+    }
+
     private fun autoDetectQuirks() {
         if (GpuDriverManager.autoUnsupportedTypes != null) return
         GpuDriverManager.autoUnsupportedTypes = ""

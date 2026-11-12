@@ -242,6 +242,19 @@ class SmolLM {
     }
 
     private external fun runQ6kCheck(): Int
+
+    /** Asks the Vulkan backend to write its pipeline cache to disk now (no-op without a GPU). */
+    fun savePipelineCache() {
+        try { nativeSavePipelineCache() } catch (_: Throwable) {}
+    }
+
+    /** Deletes the current device's pipeline cache file and stops saving until the app restarts. */
+    fun clearPipelineCache() {
+        try { nativeClearPipelineCache() } catch (_: Throwable) {}
+    }
+
+    private external fun nativeSavePipelineCache()
+    private external fun nativeClearPipelineCache()
     private external fun getGpuDeviceName(): String
     private external fun getBackendReport(): String
     private external fun addChatMessage(modelPtr: Long, message: String, role: String)

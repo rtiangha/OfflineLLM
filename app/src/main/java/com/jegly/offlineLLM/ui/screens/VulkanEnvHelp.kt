@@ -18,6 +18,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
+/** Human-readable size for the Vulkan cache indicator. */
+fun formatCacheSize(bytes: Long): String = when {
+    bytes < 1024L -> "$bytes B"
+    bytes < 1024L * 1024L -> String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0)
+    else -> String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+}
+
 /** One variable shown in the help dialog. [exampleValue] is what tapping it inserts. */
 data class EnvVarHelp(
     val name: String,
@@ -40,6 +47,7 @@ object VulkanEnvHelp {
                 EnvVarHelp("OFFLINELLM_VK_ALLOW_OLD_API", "Stops skipping GPUs below Vulkan 1.2. By default they are skipped so the app falls back to the CPU instead of crashing."),
                 EnvVarHelp("OFFLINELLM_VK_NO_DEVICE_INIT", "Turns off loading Vulkan function pointers per device after the device is created."),
                 EnvVarHelp("OFFLINELLM_VK_TRACE", "Logs breadcrumbs while buffers are created (adb logcat tag ggml-vulkan) to find which step crashes."),
+                EnvVarHelp("OFFLINELLM_VK_NO_PIPELINE_CACHE", "Forces the saved pipeline cache off, even when the Vulkan Cache switch is on."),
                 EnvVarHelp("OFFLINELLM_NO_AUTO_QUIRKS", "Skips the automatic check that moves Q6_K to the CPU when the GPU driver computes it incorrectly."),
                 EnvVarHelp("OFFLINELLM_DISABLE_FLASH_ATTN", "Disables flash attention and the Q8 KV cache. Try it if the GPU output is garbage."),
             ),

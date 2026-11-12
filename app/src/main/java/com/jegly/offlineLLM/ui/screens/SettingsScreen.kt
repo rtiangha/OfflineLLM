@@ -482,7 +482,36 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                if ((uiState.appliedGpuDriver != null && uiState.appliedGpuDriver != uiState.selectedGpuDriver) || uiState.envNeedsRestart || uiState.gpuToggleNeedsRestart) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Vulkan Cache")
+                        Text(
+                            "Keeps compiled GPU programs between launches to speed up the first prompt. Takes effect after a restart.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = uiState.useVulkanCache, onCheckedChange = { viewModel.setUseVulkanCache(it) })
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Vulkan cache: ${formatCacheSize(uiState.pipelineCacheBytes)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = { viewModel.clearPipelineCache() },
+                        enabled = uiState.pipelineCacheBytes > 0,
+                    ) { Text("Clear Cache") }
+                }
+                if ((uiState.appliedGpuDriver != null && uiState.appliedGpuDriver != uiState.selectedGpuDriver) || uiState.envNeedsRestart || uiState.gpuToggleNeedsRestart || uiState.vkCacheToggleNeedsRestart) {
                     Text(
                         "Restart the app to apply the GPU / driver / environment changes.",
                         style = MaterialTheme.typography.bodySmall,

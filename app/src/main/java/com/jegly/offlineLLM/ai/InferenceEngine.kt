@@ -57,6 +57,12 @@ class InferenceEngine {
     /** 1 = Q6_K correct on the GPU, 0 = wrong, -1 = inconclusive. */
     fun q6kGpuCheck(): Int = instance.q6kGpuCheck()
 
+    /** Writes the Vulkan pipeline cache to disk if it changed. */
+    fun savePipelineCache() = instance.savePipelineCache()
+
+    /** Deletes the Vulkan pipeline cache file and stops saving until the app restarts. */
+    fun clearPipelineCache() = instance.clearPipelineCache()
+
     fun loadModel(
         modelPath: String,
         params: SmolLM.InferenceParams = SmolLM.InferenceParams(),
@@ -130,6 +136,7 @@ class InferenceEngine {
         withTimeoutOrNull(5_000) {
             try { jobToJoin?.join() } catch (_: Exception) {}
         }
+        instance.savePipelineCache()
         try { instance.close() } catch (_: Exception) {}
     }
 
@@ -190,6 +197,9 @@ class InferenceEngine {
                             if (fullResponseStr.isNotBlank()) "(No visible content produced)" else "(Empty response)"
                         } else it
                     }
+
+                    // Pipelines compile on first use, so persist them now that a response has finished.
+                    instance.savePipelineCache()
 
                     withContext(Dispatchers.Main) {
                         isGenerating = false

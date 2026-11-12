@@ -63,6 +63,7 @@ class SettingsRepository @Inject constructor(
         const val KEY_FONT_SCALE = "font_scale"
         const val KEY_GPU_LAYERS = "gpu_layers"
         const val KEY_USE_GPU = "use_gpu"
+        const val KEY_USE_VK_CACHE = "use_vulkan_cache"
         const val KEY_GPU_DRIVER = "gpu_driver"
         const val KEY_GPU_DRIVER_TRIAL = "gpu_driver_trial"
         const val KEY_VULKAN_ENV = "vulkan_env_vars"
@@ -247,6 +248,11 @@ class SettingsRepository @Inject constructor(
     var useGpu: Boolean
         get() = prefs.getBoolean(KEY_USE_GPU, false)
         set(value) = prefs.edit().putBoolean(KEY_USE_GPU, value).apply()
+
+    // Keep compiled Vulkan pipelines on disk between launches. Off by default (original behaviour).
+    var useVulkanCache: Boolean
+        get() = prefs.getBoolean(KEY_USE_VK_CACHE, false)
+        set(value) = prefs.edit().putBoolean(KEY_USE_VK_CACHE, value).apply()
 
     // Id of the imported custom Vulkan driver (libadrenotools); "" = the device's own driver.
     var selectedGpuDriver: String

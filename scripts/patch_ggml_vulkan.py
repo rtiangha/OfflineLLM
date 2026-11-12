@@ -38,6 +38,11 @@ Step 3 is also applied to the sibling ggml-vulkan-*.cpp files in the same direct
      vkGetBufferDeviceAddress empty in the loader's table although the trampolines
      returned for the instance exist, which crashes with a null call; init(device) fetches the
      driver's own pointers and falls back to the KHR names. Opt out: OFFLINELLM_VK_NO_DEVICE_INIT.
+  9. pipeline cache: pipelines are created with a VkPipelineCache that is loaded from, and saved
+     to, OFFLINELLM_VK_PIPELINE_CACHE_DIR (one file per driver build and device), so later
+     launches skip most shader compilation. Logs "pipeline cache: loaded ..." at start and
+     "pipeline creation this run: N pipelines, M real compiles, X ms" when the app asks for a
+     save (proc address "offlinellm_pipeline_cache_save").
 (2-3 matter because the linked system loader must never be handed objects that belong
 to the custom driver.) Idempotent; exits non-zero if the init anchor is missing.
 """
@@ -141,6 +146,156 @@ static void ggml_vk_log_dispatcher_state() {
         d.vkWaitSemaphores != nullptr, d.vkWaitSemaphoresKHR != nullptr, d.vkGetSemaphoreCounterValue != nullptr);
 #endif
 }
+// ---- pipeline cache: keeps compiled GPU programs between app launches ----
+#include <chrono>
+#include <cstdio>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#if defined(__ANDROID__)
+#define GGML_VK_PC_LOG(...) __android_log_print(ANDROID_LOG_INFO, "ggml-vulkan", __VA_ARGS__)
+#else
+#define GGML_VK_PC_LOG(...) fprintf(stderr, __VA_ARGS__)
+#endif
+
+struct ggml_vk_pcache_state {
+    std::mutex mtx;
+    vk::PipelineCache cache;
+    vk::Device dev;
+    std::string path;
+    bool tried = false;
+    bool ok = false;
+    bool dirty = false;
+    bool suppress = false;
+    uint32_t created = 0;
+    uint32_t slow = 0;
+    double create_ms = 0.0;
+    size_t loaded_bytes = 0;
+    std::chrono::steady_clock::time_point last_save = std::chrono::steady_clock::now();
+};
+static ggml_vk_pcache_state g_pcache;
+
+// Returns the pipeline cache to pass to vkCreateComputePipelines (null handle = no cache).
+// Enabled by OFFLINELLM_VK_PIPELINE_CACHE_DIR; one file per driver build and device.
+static vk::PipelineCache ggml_vk_pcache_get(vk::Device device, const vk::PhysicalDeviceProperties & props) {
+    std::lock_guard<std::mutex> lock(g_pcache.mtx);
+    if (!g_pcache.tried) {
+        g_pcache.tried = true;
+        const char * dir = getenv("OFFLINELLM_VK_PIPELINE_CACHE_DIR");
+        if (dir == nullptr || *dir == '\0') {
+            return vk::PipelineCache{};
+        }
+        std::string uuid;
+        for (uint32_t i = 0; i < VK_UUID_SIZE; i++) {
+            char h[3];
+            snprintf(h, sizeof(h), "%02x", (unsigned) props.pipelineCacheUUID[i]);
+            uuid += h;
+        }
+        const std::string path = std::string(dir) + "/ggml-vk-" + uuid + "-" + std::to_string(props.vendorID) + "-" +
+                                 std::to_string(props.deviceID) + "-" + std::to_string(props.driverVersion) + ".cache";
+        std::vector<char> data;
+        if (FILE * f = fopen(path.c_str(), "rb")) {
+            fseek(f, 0, SEEK_END);
+            const long sz = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            if (sz > 0 && sz < (256L << 20)) {
+                data.resize((size_t) sz);
+                if (fread(data.data(), 1, data.size(), f) != data.size()) {
+                    data.clear();
+                }
+            }
+            fclose(f);
+        }
+        try {
+            vk::PipelineCacheCreateInfo info({}, data.size(), data.empty() ? nullptr : data.data());
+            g_pcache.cache = device.createPipelineCache(info);
+            g_pcache.loaded_bytes = data.size();
+        } catch (const vk::SystemError &) {
+            try {
+                vk::PipelineCacheCreateInfo info;
+                g_pcache.cache = device.createPipelineCache(info);
+            } catch (...) {
+                return vk::PipelineCache{};
+            }
+        }
+        g_pcache.dev = device;
+        g_pcache.path = path;
+        g_pcache.ok = true;
+        GGML_VK_PC_LOG("pipeline cache: loaded %zu bytes from %s", g_pcache.loaded_bytes, path.c_str());
+    }
+    if (!g_pcache.ok || g_pcache.dev != device) {
+        return vk::PipelineCache{};
+    }
+    return g_pcache.cache;
+}
+
+static void ggml_vk_pcache_save(bool force) {
+    std::lock_guard<std::mutex> lock(g_pcache.mtx);
+    if (!g_pcache.ok || !g_pcache.dirty || g_pcache.suppress) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (!force && now - g_pcache.last_save < std::chrono::seconds(5)) {
+        return;
+    }
+    try {
+        const std::vector<uint8_t> data = g_pcache.dev.getPipelineCacheData(g_pcache.cache);
+        const std::string tmp = g_pcache.path + ".tmp";
+        if (FILE * f = fopen(tmp.c_str(), "wb")) {
+            const size_t w = fwrite(data.data(), 1, data.size(), f);
+            fclose(f);
+            if (w == data.size() && rename(tmp.c_str(), g_pcache.path.c_str()) == 0) {
+                g_pcache.dirty = false;
+                g_pcache.last_save = now;
+                GGML_VK_PC_LOG("pipeline cache saved: %zu bytes", data.size());
+            } else {
+                remove(tmp.c_str());
+            }
+        }
+    } catch (...) {
+    }
+}
+
+// Called after every vkCreateComputePipelines; creations that take more than a couple of
+// milliseconds were real compiles (cache misses), so only those mark the cache as changed.
+static void ggml_vk_pcache_note_create(double ms) {
+    {
+        std::lock_guard<std::mutex> lock(g_pcache.mtx);
+        g_pcache.created++;
+        g_pcache.create_ms += ms;
+        if (ms > 2.0) {
+            g_pcache.slow++;
+            g_pcache.dirty = true;
+        }
+    }
+    ggml_vk_pcache_save(false);
+}
+
+// Exported to the app through the backend's proc-address table ("offlinellm_pipeline_cache_save").
+static void ggml_vk_pcache_save_now() {
+    {
+        std::lock_guard<std::mutex> lock(g_pcache.mtx);
+        if (g_pcache.ok) {
+            GGML_VK_PC_LOG("pipeline creation this run: %u pipelines, %u real compiles, %.0f ms total (cache had %zu bytes at start)",
+                           g_pcache.created, g_pcache.slow, g_pcache.create_ms, g_pcache.loaded_bytes);
+        }
+    }
+    ggml_vk_pcache_save(true);
+}
+
+// "Clear Cache" in the app: delete this device's cache file and stop saving for the rest of this
+// process (the in-memory cache still holds the old data); a fresh cache is built after a restart.
+static void ggml_vk_pcache_clear() {
+    std::lock_guard<std::mutex> lock(g_pcache.mtx);
+    g_pcache.suppress = true;
+    g_pcache.dirty = false;
+    if (!g_pcache.path.empty()) {
+        remove(g_pcache.path.c_str());
+        remove((g_pcache.path + ".tmp").c_str());
+    }
+    GGML_VK_PC_LOG("pipeline cache cleared");
+}
 // ---- end GGML_VK_ADRENOTOOLS_PATCH ----
 '''
 
@@ -191,6 +346,29 @@ def main():
         counts["device init"] = 1
     else:
         print("WARNING: createDevice anchor not found once; per-device entry points not initialised")
+
+    pc_old = "pipeline->pipeline = device->device.createComputePipeline(VK_NULL_HANDLE, compute_pipeline_create_info).value;"
+    if src.count(pc_old) == 1:
+        src = src.replace(pc_old,
+            "const auto pc_t0 = std::chrono::steady_clock::now();\n"
+            "        pipeline->pipeline = device->device.createComputePipeline(ggml_vk_pcache_get(device->device, device->properties), compute_pipeline_create_info).value;\n"
+            "        ggml_vk_pcache_note_create(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pc_t0).count());", 1)
+        counts["pipeline cache"] = 1
+    else:
+        print("WARNING: createComputePipeline anchor not found once; no pipeline cache")
+
+    pa_old = "static void * ggml_backend_vk_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {\n    UNUSED(reg);\n"
+    if src.count(pa_old) == 1:
+        src = src.replace(pa_old, pa_old +
+            "    if (strcmp(name, \"offlinellm_pipeline_cache_save\") == 0) {\n"
+            "        return (void *) ggml_vk_pcache_save_now;\n"
+            "    }\n"
+            "    if (strcmp(name, \"offlinellm_pipeline_cache_clear\") == 0) {\n"
+            "        return (void *) ggml_vk_pcache_clear;\n"
+            "    }\n", 1)
+        counts["cache save hook"] = 1
+    else:
+        print("WARNING: reg_get_proc_address anchor not found once; the app cannot trigger cache saves")
 
     bda_old = "device->buffer_device_address = vk12_features.bufferDeviceAddress;"
     n_bda = src.count(bda_old)

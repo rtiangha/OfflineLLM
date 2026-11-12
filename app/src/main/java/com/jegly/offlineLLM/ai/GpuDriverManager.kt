@@ -166,6 +166,9 @@ class GpuDriverManager(private val context: Context) {
          */
         @Volatile var appliedUseGpu: Boolean? = null
 
+        /** Value of the "Vulkan Cache" setting when this process started (null until ModelManager exists). */
+        @Volatile var appliedUseVkCache: Boolean? = null
+
         /**
          * Weight types the automatic GPU check moved to the CPU in this process ("" = none,
          * "Q6_K" = Q6_K); null until the check has had its chance to run.

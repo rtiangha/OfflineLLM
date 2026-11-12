@@ -77,8 +77,13 @@ data class SettingsUiState(
     val envNeedsRestart: Boolean = false,
     // True when the GPU Acceleration switch differs from its value at app start.
     val gpuToggleNeedsRestart: Boolean = false,
+    // "Vulkan Cache" switch (off by default) and whether it differs from its value at app start.
+    val useVulkanCache: Boolean = false,
+    val vkCacheToggleNeedsRestart: Boolean = false,
     // Weight types the automatic GPU check moved to the CPU ("" = none).
     val autoUnsupportedTypes: String = "",
+    // Size of the saved Vulkan pipeline cache, in bytes.
+    val pipelineCacheBytes: Long = 0L,
     val selfTestRunning: Boolean = false,
     val selfTestReport: String = "",
 )
@@ -122,6 +127,7 @@ class SettingsViewModel @Inject constructor(
                     gpuDriverAutoDisabled = GpuDriverManager.autoDisabledDriver,
                     envNeedsRestart = envNeedsRestart(),
                     autoUnsupportedTypes = GpuDriverManager.autoUnsupportedTypes ?: "",
+                    pipelineCacheBytes = modelManager.pipelineCacheSizeBytes(),
                 )
             }
         }
@@ -160,6 +166,8 @@ class SettingsViewModel @Inject constructor(
             gpuLayers = settingsRepository.gpuLayers,
             useGpu = settingsRepository.useGpu,
             gpuToggleNeedsRestart = gpuToggleNeedsRestart(settingsRepository.useGpu),
+            useVulkanCache = settingsRepository.useVulkanCache,
+            vkCacheToggleNeedsRestart = vkCacheToggleNeedsRestart(settingsRepository.useVulkanCache),
             selectedGpuDriver = settingsRepository.selectedGpuDriver,
             vulkanEnvVars = settingsRepository.vulkanEnvVars,
             useMmap = settingsRepository.useMmap,
@@ -314,6 +322,11 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(useGpu = enabled, gpuToggleNeedsRestart = gpuToggleNeedsRestart(enabled)) }
     }
 
+    fun setUseVulkanCache(enabled: Boolean) {
+        settingsRepository.useVulkanCache = enabled
+        _uiState.update { it.copy(useVulkanCache = enabled, vkCacheToggleNeedsRestart = vkCacheToggleNeedsRestart(enabled)) }
+    }
+
     fun importGpuDriver(uri: Uri) {
         viewModelScope.launch {
             _uiState.update { it.copy(isImportingDriver = true) }
@@ -352,6 +365,9 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    private fun vkCacheToggleNeedsRestart(enabled: Boolean): Boolean =
+        GpuDriverManager.appliedUseVkCache?.let { it != enabled } ?: false
+
     private fun gpuToggleNeedsRestart(enabled: Boolean): Boolean =
         GpuDriverManager.appliedUseGpu?.let { it != enabled } ?: false
 
@@ -372,6 +388,17 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val report = modelManager.runGpuSelfTest()
             _uiState.update { it.copy(selfTestRunning = false, selfTestReport = report) }
+        }
+    }
+
+    fun clearPipelineCache() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            modelManager.clearPipelineCache()
+            val bytes = modelManager.pipelineCacheSizeBytes()
+            _uiState.update { it.copy(pipelineCacheBytes = bytes) }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                Toast.makeText(application, "Vulkan cache cleared. Restart the app to start rebuilding it.", Toast.LENGTH_LONG).show()
+            }
         }
     }
 

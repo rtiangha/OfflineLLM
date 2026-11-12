@@ -499,3 +499,28 @@ Java_com_jegly_offlineLLM_smollm_SmolLM_runQ6kCheck(JNIEnv* env, jobject thiz) {
     }
     return verdict;
 }
+
+// Calls a function the (patched) Vulkan backend publishes through its proc-address table.
+static void callVulkanBackendHook(const char* name) {
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        const enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
+        if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) continue;
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        void* fn = reg != nullptr ? ggml_backend_reg_get_proc_address(reg, name) : nullptr;
+        if (fn != nullptr) {
+            ((void (*)()) fn)();
+            return;
+        }
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_jegly_offlineLLM_smollm_SmolLM_nativeSavePipelineCache(JNIEnv* env, jobject thiz) {
+    try { callVulkanBackendHook("offlinellm_pipeline_cache_save"); } catch (...) {}
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_jegly_offlineLLM_smollm_SmolLM_nativeClearPipelineCache(JNIEnv* env, jobject thiz) {
+    try { callVulkanBackendHook("offlinellm_pipeline_cache_clear"); } catch (...) {}
+}
