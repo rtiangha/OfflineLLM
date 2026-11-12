@@ -67,6 +67,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jegly.offlineLLM.ai.ModelManager
 import com.jegly.offlineLLM.data.local.entities.Conversation
+import com.jegly.offlineLLM.ui.components.BackendIndicator
 import com.jegly.offlineLLM.ui.components.InputBar
 import com.jegly.offlineLLM.ui.components.LoadingIndicator
 import com.jegly.offlineLLM.ui.components.MessageBubble
@@ -255,6 +256,7 @@ fun ChatScreen(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            BackendIndicator(uiState.backendStatus)
                             Text(
                                 text = "${uiState.contextUsed} / ${uiState.contextMax}",
                                 style = MaterialTheme.typography.labelSmall,

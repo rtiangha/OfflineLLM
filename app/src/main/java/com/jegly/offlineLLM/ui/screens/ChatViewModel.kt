@@ -44,6 +44,7 @@ data class ChatUiState(
     val sensitiveDataAccessibilityEnabled: Boolean = false,
     val contextUsed: Int = 0,
     val contextMax: Int = 4096,
+    val backendStatus: InferenceEngine.BackendStatus = InferenceEngine.BackendStatus(),
 )
 
 @HiltViewModel
@@ -120,6 +121,13 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             modelManager.modelState.collect { state ->
                 _uiState.update { it.copy(modelState = state) }
+            }
+        }
+
+        // What the loaded model is running on (GPU/CPU), shown at the top of the chat
+        viewModelScope.launch {
+            inferenceEngine.backendStatus.collect { status ->
+                _uiState.update { it.copy(backendStatus = status) }
             }
         }
 

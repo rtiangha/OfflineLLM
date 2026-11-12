@@ -29,7 +29,18 @@ class InferenceEngine {
 
     @Volatile
     var isGenerating = false
-        private set
+
+    /** What the loaded model is actually running on. */
+    enum class BackendMode { NONE, CPU, GPU, CPU_FALLBACK, CPU_NO_GPU }
+
+    data class BackendStatus(
+        val mode: BackendMode = BackendMode.NONE,
+        val gpuLayers: Int = 0,
+        val detail: String = "",
+    )
+
+    private val _backendStatus = kotlinx.coroutines.flow.MutableStateFlow(BackendStatus())
+    val backendStatus: kotlinx.coroutines.flow.StateFlow<BackendStatus> = _backendStatus
 
     data class GenerationResult(
         val response: String,
@@ -76,6 +87,7 @@ class InferenceEngine {
 
             loadJob = CoroutineScope(Dispatchers.Default).launch {
                 try {
+                    var gpuFallbackReason: String? = null
                     try {
                         instance.load(modelPath, params)
                     } catch (e: CancellationException) {
@@ -89,6 +101,7 @@ class InferenceEngine {
                                 "InferenceEngine",
                                 "GPU-accelerated load failed (${e.message}); retrying on CPU"
                             )
+                            gpuFallbackReason = e.message ?: "unknown error"
                             instance.load(modelPath, params.copy(nGpuLayers = 0))
                         } else {
                             throw e
@@ -101,6 +114,14 @@ class InferenceEngine {
 
                     for ((role, content) in conversationHistory) {
                         instance.addChatMessage(role, content)
+                    }
+
+                    _backendStatus.value = when {
+                        gpuFallbackReason != null ->
+                            BackendStatus(BackendMode.CPU_FALLBACK, 0, gpuFallbackReason)
+                        params.nGpuLayers <= 0 -> BackendStatus(BackendMode.CPU)
+                        instance.getGpuDeviceInfo().isEmpty() -> BackendStatus(BackendMode.CPU_NO_GPU)
+                        else -> BackendStatus(BackendMode.GPU, params.nGpuLayers)
                     }
 
                     withContext(Dispatchers.Main) {
@@ -124,6 +145,7 @@ class InferenceEngine {
             loadJob?.cancel()
             jobToJoin = generationJob
             isModelLoaded.set(false)
+            _backendStatus.value = BackendStatus()
             isGenerating = false
         }
         // Signal the native side to stop first — this makes the blocking
