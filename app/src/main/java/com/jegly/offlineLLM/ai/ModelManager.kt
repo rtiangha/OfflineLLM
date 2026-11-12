@@ -2,6 +2,7 @@ package com.jegly.offlineLLM.ai
 
 import android.content.Context
 import android.net.Uri
+import android.system.Os
 import com.jegly.offlineLLM.data.local.entities.ModelInfo
 import com.jegly.offlineLLM.data.repository.ChatRepository
 import com.jegly.offlineLLM.data.repository.SettingsRepository
@@ -20,6 +21,12 @@ class ModelManager(
     private val inferenceEngine: InferenceEngine,
 ) {
     private val modelsDir = File(context.filesDir, "models").apply { mkdirs() }
+    private val backendLock = Any()
+
+    init {
+        // Remember the GPU toggle as it was when the app started, so Settings can offer a restart after a change.
+        if (GpuDriverManager.appliedUseGpu == null) GpuDriverManager.appliedUseGpu = settingsRepository.useGpu
+    }
 
     private val _copyProgress = MutableStateFlow(0f)
     val copyProgress: StateFlow<Float> = _copyProgress
@@ -202,13 +209,105 @@ class ModelManager(
     }
 
     private fun ensureBackendsLoaded() {
-        inferenceEngine.initBackends(context.applicationInfo.nativeLibraryDir ?: "")
+        synchronized(backendLock) {
+            if (GpuDriverManager.appliedDriverId == null) applyGpuDriverSelection()
+            inferenceEngine.initBackends(context.applicationInfo.nativeLibraryDir ?: "")
+            autoDetectQuirks()
+        }
+    }
+
+    /**
+     * Once per process, after the backends are up: checks whether this driver + GPU computes Q6_K
+     * correctly and, if not, adds Q6_K to GGML_VK_UNSUPPORTED_TYPES so those weights stay on the
+     * CPU. The result is remembered per driver and device; a check that crashed is never repeated.
+     * Skipped when the user already lists Q6_K, or sets OFFLINELLM_NO_AUTO_QUIRKS.
+     */
+    private fun autoDetectQuirks() {
+        if (GpuDriverManager.autoUnsupportedTypes != null) return
+        GpuDriverManager.autoUnsupportedTypes = ""
+        if (Os.getenv("OFFLINELLM_NO_AUTO_QUIRKS") != null) return
+        val types = Os.getenv("GGML_VK_UNSUPPORTED_TYPES") ?: ""
+        if (types.split(',').any { it.trim().equals("Q6_K", ignoreCase = true) }) return
+        val device = inferenceEngine.getGpuDeviceInfo()
+        if (device.isEmpty()) return
+        val key = "${GpuDriverManager.appliedDriverId ?: ""}|$device"
+        var result = settingsRepository.quirkResult(key)
+        if (settingsRepository.quirkPending == key) {
+            // The previous check never finished: it crashed. Do not run it again for this combination.
+            result = "error"
+            settingsRepository.setQuirkResult(key, result)
+            settingsRepository.setQuirkPending("")
+        }
+        if (result.isEmpty()) {
+            settingsRepository.setQuirkPending(key)
+            val verdict = inferenceEngine.q6kGpuCheck()
+            settingsRepository.setQuirkPending("")
+            result = when (verdict) {
+                1 -> "ok"
+                0 -> "q6k_bad"
+                else -> ""
+            }
+            if (result.isNotEmpty()) settingsRepository.setQuirkResult(key, result)
+        }
+        if (result == "q6k_bad") {
+            Os.setenv("GGML_VK_UNSUPPORTED_TYPES", if (types.isBlank()) "Q6_K" else "$types,Q6_K", true)
+            GpuDriverManager.autoUnsupportedTypes = "Q6_K"
+        }
+    }
+
+    /** Exports the user's GGML_VK_* debug switches; the Vulkan backend reads them at startup. */
+    private fun applyVulkanEnv() {
+        val text = settingsRepository.vulkanEnvVars
+        for ((name, value) in GpuDriverManager.parseEnv(text)) {
+            try {
+                android.system.Os.setenv(name, value, true)
+            } catch (e: Exception) {
+                android.util.Log.w("ModelManager", "Could not set $name: ${e.message}")
+            }
+        }
+        GpuDriverManager.appliedEnv = GpuDriverManager.normalizeEnv(text)
+    }
+
+    /**
+     * Hands the user's chosen custom GPU driver (if any) to the native layer. Runs once per
+     * process, before the Vulkan backend starts. If the previous launch died while starting
+     * the same driver (trial flag still set), the selection is reset to the system driver so
+     * a bad driver can never lock the user out of the app.
+     */
+    private fun applyGpuDriverSelection() {
+        val drivers = GpuDriverManager(context)
+        var id = settingsRepository.selectedGpuDriver
+        if (id.isNotEmpty() && settingsRepository.gpuDriverTrial == id) {
+            GpuDriverManager.autoDisabledDriver = id
+            settingsRepository.selectedGpuDriver = GpuDriverManager.SYSTEM_DRIVER
+            settingsRepository.setGpuDriverTrial("")
+            id = GpuDriverManager.SYSTEM_DRIVER
+        }
+        applyVulkanEnv()
+        val selection = if (id.isEmpty()) null else drivers.resolve(id)
+        if (selection != null) settingsRepository.setGpuDriverTrial(id)
+        inferenceEngine.configureCustomDriver(
+            context.cacheDir.absolutePath,
+            context.applicationInfo.nativeLibraryDir,
+            selection?.dirPath,
+            selection?.libraryName,
+        )
+        GpuDriverManager.appliedDriverId = if (selection != null) id else GpuDriverManager.SYSTEM_DRIVER
     }
 
     /** GPU device description (e.g. "Adreno (TM) 640"), or "" if no usable GPU backend. */
     fun getGpuDeviceInfo(): String {
         ensureBackendsLoaded()
-        return inferenceEngine.getGpuDeviceInfo()
+        val info = inferenceEngine.getGpuDeviceInfo()
+        // The driver got far enough to enumerate a device: clear the crash-guard flag.
+        if (info.isNotEmpty()) settingsRepository.setGpuDriverTrial("")
+        return info
+    }
+
+    /** Compares CPU and GPU results for a set of ggml ops; a diagnostic for broken GPU drivers. */
+    fun runGpuSelfTest(): String {
+        ensureBackendsLoaded()
+        return inferenceEngine.gpuSelfTest()
     }
 
     /**

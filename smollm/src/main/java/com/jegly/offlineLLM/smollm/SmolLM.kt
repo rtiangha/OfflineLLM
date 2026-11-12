@@ -85,6 +85,21 @@ class SmolLM {
         }
 
     /**
+     * Selects a libadrenotools custom Vulkan driver (e.g. Mesa Turnip) for the GPU backend.
+     * MUST be called before [loadBackends]: Vulkan is initialised once per process, so a
+     * different driver only takes effect after an app restart. Pass nulls/empty strings to
+     * use the device's own driver. [driverDir] must end with '/' and live in private storage;
+     * [hookDir] must be the app's nativeLibraryDir.
+     */
+    fun configureCustomDriver(tmpDir: String?, hookDir: String?, driverDir: String?, driverName: String?) {
+        try {
+            setCustomDriver(tmpDir, hookDir, driverDir, driverName)
+        } catch (e: UnsatisfiedLinkError) {
+            android.util.Log.w(TAG, "setCustomDriver unavailable: ${e.message}")
+        }
+    }
+
+    /**
      * Loads the ggml backend plugins from the app's nativeLibraryDir, picking the
      * best CPU-variant kernels for this device. Must run once before the first
      * [load] or [getGpuDeviceInfo]; subsequent calls are no-ops.
@@ -205,7 +220,28 @@ class SmolLM {
         nThreadsBatch: Int, kvCacheQ8: Boolean
     ): Long
     private external fun initBackends(nativeLibDir: String)
+    private external fun setCustomDriver(tmpDir: String?, hookDir: String?, driverDir: String?, driverName: String?)
 
+    /**
+     * Diagnostic: runs ggml ops on CPU and GPU with identical inputs and reports where the
+     * GPU result differs. Call after the backends are loaded. A broken driver can crash here.
+     */
+    fun gpuSelfTest(): String = try {
+        runGpuSelfTest()
+    } catch (e: Throwable) {
+        "GPU self-test unavailable: ${e.message}"
+    }
+
+    private external fun runGpuSelfTest(): String
+
+    /** 1 = the GPU computes Q6_K matrix multiplication correctly, 0 = it does not, -1 = could not tell. */
+    fun q6kGpuCheck(): Int = try {
+        runQ6kCheck()
+    } catch (e: Throwable) {
+        -1
+    }
+
+    private external fun runQ6kCheck(): Int
     private external fun getGpuDeviceName(): String
     private external fun getBackendReport(): String
     private external fun addChatMessage(modelPtr: Long, message: String, role: String)

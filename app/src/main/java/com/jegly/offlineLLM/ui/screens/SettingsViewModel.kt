@@ -5,6 +5,8 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.jegly.offlineLLM.ai.GpuDriverInfo
+import com.jegly.offlineLLM.ai.GpuDriverManager
 import com.jegly.offlineLLM.ai.ModelManager
 import com.jegly.offlineLLM.data.local.entities.ModelInfo
 import com.jegly.offlineLLM.data.repository.ChatRepository
@@ -63,6 +65,22 @@ data class SettingsUiState(
     val gpuDeviceName: String = "",
     val backendInfo: String = "",
     val isImportingModel: Boolean = false,
+    // Custom Vulkan drivers (libadrenotools). "" = system driver.
+    val gpuDrivers: List<GpuDriverInfo> = emptyList(),
+    val selectedGpuDriver: String = "",
+    // Driver the Vulkan backend actually started with in this process; null = not started yet.
+    val appliedGpuDriver: String? = null,
+    val gpuDriverAutoDisabled: String? = null,
+    val isImportingDriver: Boolean = false,
+    // GGML_VK_* debug switches (raw text) and whether they differ from what's running.
+    val vulkanEnvVars: String = "",
+    val envNeedsRestart: Boolean = false,
+    // True when the GPU Acceleration switch differs from its value at app start.
+    val gpuToggleNeedsRestart: Boolean = false,
+    // Weight types the automatic GPU check moved to the CPU ("" = none).
+    val autoUnsupportedTypes: String = "",
+    val selfTestRunning: Boolean = false,
+    val selfTestReport: String = "",
 )
 
 @HiltViewModel
@@ -93,7 +111,19 @@ class SettingsViewModel @Inject constructor(
             val gpuName = modelManager.getGpuDeviceInfo()
             // Same backend registry, already loaded by the call above.
             val backends = modelManager.getBackendInfo()
-            _uiState.update { it.copy(gpuDeviceName = gpuName, backendInfo = backends) }
+            val drivers = GpuDriverManager(application).list()
+            _uiState.update {
+                it.copy(
+                    gpuDeviceName = gpuName,
+                    backendInfo = backends,
+                    gpuDrivers = drivers,
+                    selectedGpuDriver = settingsRepository.selectedGpuDriver,
+                    appliedGpuDriver = GpuDriverManager.appliedDriverId,
+                    gpuDriverAutoDisabled = GpuDriverManager.autoDisabledDriver,
+                    envNeedsRestart = envNeedsRestart(),
+                    autoUnsupportedTypes = GpuDriverManager.autoUnsupportedTypes ?: "",
+                )
+            }
         }
     }
 
@@ -129,6 +159,9 @@ class SettingsViewModel @Inject constructor(
             fontScale = settingsRepository.fontScale,
             gpuLayers = settingsRepository.gpuLayers,
             useGpu = settingsRepository.useGpu,
+            gpuToggleNeedsRestart = gpuToggleNeedsRestart(settingsRepository.useGpu),
+            selectedGpuDriver = settingsRepository.selectedGpuDriver,
+            vulkanEnvVars = settingsRepository.vulkanEnvVars,
             useMmap = settingsRepository.useMmap,
             useMlock = settingsRepository.useMlock,
             kvCacheQ8 = settingsRepository.kvCacheQ8,
@@ -278,7 +311,75 @@ class SettingsViewModel @Inject constructor(
 
     fun setUseGpu(enabled: Boolean) {
         settingsRepository.useGpu = enabled
-        _uiState.update { it.copy(useGpu = enabled) }
+        _uiState.update { it.copy(useGpu = enabled, gpuToggleNeedsRestart = gpuToggleNeedsRestart(enabled)) }
+    }
+
+    fun importGpuDriver(uri: Uri) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isImportingDriver = true) }
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                GpuDriverManager(application).importDriver(uri)
+            }
+            val drivers = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                GpuDriverManager(application).list()
+            }
+            _uiState.update { it.copy(isImportingDriver = false, gpuDrivers = drivers) }
+            result.fold(
+                onSuccess = { driver ->
+                    Toast.makeText(application, "Driver imported: ${driver.name}", Toast.LENGTH_SHORT).show()
+                },
+                onFailure = { e ->
+                    Toast.makeText(application, "Driver import failed: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            )
+        }
+    }
+
+    /** Takes effect after an app restart: Vulkan starts once per process. */
+    fun selectGpuDriver(id: String) {
+        settingsRepository.selectedGpuDriver = id
+        settingsRepository.setGpuDriverTrial("")
+        _uiState.update { it.copy(selectedGpuDriver = id, gpuDriverAutoDisabled = null) }
+    }
+
+    fun deleteGpuDriver(id: String) {
+        viewModelScope.launch {
+            val manager = GpuDriverManager(application)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { manager.delete(id) }
+            if (settingsRepository.selectedGpuDriver == id) selectGpuDriver(GpuDriverManager.SYSTEM_DRIVER)
+            val drivers = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { manager.list() }
+            _uiState.update { it.copy(gpuDrivers = drivers) }
+        }
+    }
+
+    private fun gpuToggleNeedsRestart(enabled: Boolean): Boolean =
+        GpuDriverManager.appliedUseGpu?.let { it != enabled } ?: false
+
+    private fun envNeedsRestart(): Boolean {
+        val applied = GpuDriverManager.appliedEnv ?: return false
+        return applied != GpuDriverManager.normalizeEnv(settingsRepository.vulkanEnvVars)
+    }
+
+    /** GGML_VK_* debug switches; take effect after an app restart. */
+    fun setVulkanEnvVars(text: String) {
+        settingsRepository.vulkanEnvVars = text
+        _uiState.update { it.copy(vulkanEnvVars = text, envNeedsRestart = envNeedsRestart()) }
+    }
+
+    fun runGpuSelfTest() {
+        if (_uiState.value.selfTestRunning) return
+        _uiState.update { it.copy(selfTestRunning = true, selfTestReport = "") }
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val report = modelManager.runGpuSelfTest()
+            _uiState.update { it.copy(selfTestRunning = false, selfTestReport = report) }
+        }
+    }
+
+    fun restartApp() {
+        val launch = application.packageManager.getLaunchIntentForPackage(application.packageName) ?: return
+        val component = launch.component ?: return
+        application.startActivity(android.content.Intent.makeRestartActivityTask(component))
+        Runtime.getRuntime().exit(0)
     }
 
     fun setUseMmap(enabled: Boolean) {

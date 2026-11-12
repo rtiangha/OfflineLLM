@@ -1,5 +1,6 @@
 #include "LLMInference.h"
 #include <android/log.h>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -171,7 +172,15 @@ LLMInference::loadModel(const char *model_path, float minP, float temperature, f
     // Large-vocab models made this scale into serious memory pressure on phones.
     // Raise this if multi-token output is ever needed in one decode.
     ctx_params.n_outputs_max = 1;
-    if (kvCacheQ8) {
+    // Debug switch (Settings > Vulkan environment variables): some GPU drivers produce
+    // garbage with the flash attention shaders. A quantized V cache needs flash
+    // attention, so the Q8 KV cache is skipped as well while this is set.
+    const bool noFlashAttn = getenv("OFFLINELLM_DISABLE_FLASH_ATTN") != nullptr;
+    if (noFlashAttn) {
+        LOGi("flash attention disabled by OFFLINELLM_DISABLE_FLASH_ATTN");
+        ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    }
+    if (kvCacheQ8 && !noFlashAttn) {
         // Halves KV-cache memory at long contexts. Requires flash attention,
         // which llama.cpp enables automatically where supported.
         ctx_params.type_k = GGML_TYPE_Q8_0;

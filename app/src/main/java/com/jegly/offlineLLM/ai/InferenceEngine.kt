@@ -41,11 +41,21 @@ class InferenceEngine {
     /** Loads ggml backend plugins (best CPU variant + Vulkan) from the app's lib dir. */
     fun initBackends(nativeLibDir: String) = instance.loadBackends(nativeLibDir)
 
+    /** Picks the custom Vulkan driver (or none) for the GPU backend; call before [initBackends]. */
+    fun configureCustomDriver(tmpDir: String?, hookDir: String?, driverDir: String?, driverName: String?) =
+        instance.configureCustomDriver(tmpDir, hookDir, driverDir, driverName)
+
     /** GPU device description from the ggml backend registry, or "" if none. */
     fun getGpuDeviceInfo(): String = instance.getGpuDeviceInfo()
 
     /** Registered backends and the CPU feature variant selected for this device. */
     fun getBackendInfo(): String = instance.getBackendInfo()
+
+    /** CPU-vs-GPU op comparison report (diagnostic). */
+    fun gpuSelfTest(): String = instance.gpuSelfTest()
+
+    /** 1 = Q6_K correct on the GPU, 0 = wrong, -1 = inconclusive. */
+    fun q6kGpuCheck(): Int = instance.q6kGpuCheck()
 
     fun loadModel(
         modelPath: String,

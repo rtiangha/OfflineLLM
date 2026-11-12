@@ -63,6 +63,10 @@ class SettingsRepository @Inject constructor(
         const val KEY_FONT_SCALE = "font_scale"
         const val KEY_GPU_LAYERS = "gpu_layers"
         const val KEY_USE_GPU = "use_gpu"
+        const val KEY_GPU_DRIVER = "gpu_driver"
+        const val KEY_GPU_DRIVER_TRIAL = "gpu_driver_trial"
+        const val KEY_VULKAN_ENV = "vulkan_env_vars"
+        const val KEY_QUIRK_PENDING = "quirk_pending"
         const val KEY_USE_MMAP = "use_mmap"
         const val KEY_USE_MLOCK = "use_mlock"
         const val KEY_KV_CACHE_Q8 = "kv_cache_q8"
@@ -243,6 +247,41 @@ class SettingsRepository @Inject constructor(
     var useGpu: Boolean
         get() = prefs.getBoolean(KEY_USE_GPU, false)
         set(value) = prefs.edit().putBoolean(KEY_USE_GPU, value).apply()
+
+    // Id of the imported custom Vulkan driver (libadrenotools); "" = the device's own driver.
+    var selectedGpuDriver: String
+        get() = prefs.getString(KEY_GPU_DRIVER, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_GPU_DRIVER, value).apply()
+
+    // Free-text GGML_VK_* debug switches (NAME=VALUE per line), applied at app start.
+    var vulkanEnvVars: String
+        get() = prefs.getString(KEY_VULKAN_ENV, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_VULKAN_ENV, value).apply()
+
+    // Crash guard: the driver id currently being started. Cleared once the GPU device has
+    // been enumerated; if still set on the next launch, the driver crashed the app.
+    val gpuDriverTrial: String
+        get() = prefs.getString(KEY_GPU_DRIVER_TRIAL, "") ?: ""
+
+    // commit() (synchronous) on purpose: this must hit disk before a possible native crash.
+    fun setGpuDriverTrial(id: String) {
+        prefs.edit().putString(KEY_GPU_DRIVER_TRIAL, id).commit()
+    }
+
+    // Result of the automatic Q6_K check per "driver|device" key: "ok", "q6k_bad" or "error"; "" = not checked yet.
+    fun quirkResult(key: String): String = prefs.getString("quirk_$key", "") ?: ""
+
+    fun setQuirkResult(key: String, value: String) {
+        prefs.edit().putString("quirk_$key", value).commit()
+    }
+
+    // Key of a check that is running right now; still set at the next launch means the check crashed.
+    val quirkPending: String
+        get() = prefs.getString(KEY_QUIRK_PENDING, "") ?: ""
+
+    fun setQuirkPending(key: String) {
+        prefs.edit().putString(KEY_QUIRK_PENDING, key).commit()
+    }
 
     // Defaults off: mapping the weights leaves them as file-backed pages the kernel
     // can evict under pressure, so the first reply stalls re-faulting them back in.

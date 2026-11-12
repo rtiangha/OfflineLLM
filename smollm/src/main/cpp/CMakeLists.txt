@@ -13,7 +13,32 @@ endif()
 
 # llama.cpp must be cloned at the project root as a submodule
 # git submodule add https://github.com/ggerganov/llama.cpp.git
+# libadrenotools (git submodule at project root, with its own linkernsbypass
+# submodule): lets the Vulkan backend load a custom driver such as Mesa Turnip.
+# Built PIC because it is linked into the ggml-vulkan plugin (a shared library).
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(ADRENOTOOLS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../libadrenotools")
+if(NOT EXISTS "${ADRENOTOOLS_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR "libadrenotools submodule missing - run: git submodule update --init --recursive")
+endif()
+# libadrenotools' `add_library(adrenotools ...)` follows BUILD_SHARED_LIBS, which the
+# Gradle config sets to ON for llama.cpp. Force a static adrenotools (linked into the
+# ggml-vulkan plugin); its hook libs (libhook_impl.so, libmain_hook.so, ...) are
+# explicitly SHARED targets and still land in the APK's native lib dir, which is where
+# adrenotools_open_libvulkan() expects them. unset() restores the -D cache value.
+set(BUILD_SHARED_LIBS OFF)
+add_subdirectory(${ADRENOTOOLS_DIR} libadrenotools)
+unset(BUILD_SHARED_LIBS)
+
 add_subdirectory(../../../../llama.cpp llama.cpp)
+
+# ggml-vulkan.cpp is patched by scripts/patch_ggml_vulkan.py to call
+# adrenotools_open_libvulkan() when a custom driver is configured.
+if(NOT TARGET ggml-vulkan)
+    message(FATAL_ERROR "ggml-vulkan target not found (is GGML_VULKAN=ON?)")
+endif()
+target_link_libraries(ggml-vulkan PRIVATE adrenotools log)
+target_include_directories(ggml-vulkan PRIVATE "${ADRENOTOOLS_DIR}/include")
 set(LLAMA_DIR_RELATIVE "../../../../llama.cpp")
 get_filename_component(LLAMA_DIR ${LLAMA_DIR_RELATIVE} ABSOLUTE)
 

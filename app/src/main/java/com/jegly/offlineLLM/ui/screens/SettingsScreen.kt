@@ -106,6 +106,10 @@ fun SettingsScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri -> uri?.let { viewModel.importChats(it) } }
 
+    val importDriverLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let { viewModel.importGpuDriver(it) } }
+
     var showClearDialog by remember { mutableStateOf(false) }
     var clearConfirmText by remember { mutableStateOf("") }
 
@@ -381,6 +385,125 @@ fun SettingsScreen(
                     valueRange = 1f..99f,
                     steps = 97,
                 )
+            }
+            // GPU driver selection (libadrenotools: custom Vulkan drivers such as Mesa Turnip)
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text("GPU Driver")
+                Text(
+                    "Which Vulkan driver the GPU backend uses. Import an Adrenotools driver package (.zip with meta.json), e.g. a Mesa Turnip build. Adreno GPUs only. Changing the driver needs an app restart.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(
+                        selected = uiState.selectedGpuDriver.isEmpty(),
+                        onClick = { viewModel.selectGpuDriver("") },
+                    )
+                    Text("System driver")
+                }
+                uiState.gpuDrivers.forEach { driver ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = uiState.selectedGpuDriver == driver.id,
+                            onClick = { viewModel.selectGpuDriver(driver.id) },
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(driver.name)
+                            val detail = listOf(driver.vendor, driver.version).filter { it.isNotBlank() }.joinToString(" · ")
+                            if (detail.isNotEmpty()) {
+                                Text(
+                                    detail,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        IconButton(onClick = { viewModel.deleteGpuDriver(driver.id) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete driver")
+                        }
+                    }
+                }
+                Button(
+                    onClick = {
+                        importDriverLauncher.launch(
+                            arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")
+                        )
+                    },
+                    enabled = !uiState.isImportingDriver,
+                ) {
+                    Text(if (uiState.isImportingDriver) "Importing…" else "Import driver (.zip)")
+                }
+                if (uiState.gpuDriverAutoDisabled != null) {
+                    Text(
+                        "The custom driver crashed while loading, so the system driver was restored.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                var envText by remember { mutableStateOf(uiState.vulkanEnvVars) }
+                var showEnvHelp by remember { mutableStateOf(false) }
+                OutlinedTextField(
+                    value = envText,
+                    onValueChange = { envText = it },
+                    label = { Text("Vulkan environment variables") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "One NAME=VALUE per line: GGML_VK_* names, or OFFLINELLM_DISABLE_FLASH_ATTN=1 (also turns off the Q8 KV cache). Applied at app start. Safe Preset keeps Q6_K weights on the CPU, which Turnip needs on Adreno 6xx.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { viewModel.setVulkanEnvVars(envText) }) { Text("Save") }
+                    TextButton(
+                        onClick = {
+                            envText = "GGML_VK_UNSUPPORTED_TYPES=Q6_K"
+                        }
+                    ) { Text("Safe Preset") }
+                    TextButton(onClick = { envText = "" }) { Text("Clear") }
+                    TextButton(onClick = { showEnvHelp = true }) { Text("Help") }
+                }
+                if (showEnvHelp) {
+                    VulkanEnvHelpDialog(
+                        envText = envText,
+                        onInsert = { name, value -> envText = VulkanEnvHelp.insertLine(envText, name, value) },
+                        onDismiss = { showEnvHelp = false },
+                    )
+                }
+                if (uiState.autoUnsupportedTypes.isNotEmpty()) {
+                    Text(
+                        "Auto-detected: ${uiState.autoUnsupportedTypes} runs on the CPU because this GPU driver computes it incorrectly.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if ((uiState.appliedGpuDriver != null && uiState.appliedGpuDriver != uiState.selectedGpuDriver) || uiState.envNeedsRestart || uiState.gpuToggleNeedsRestart) {
+                    Text(
+                        "Restart the app to apply the GPU / driver / environment changes.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    TextButton(onClick = { viewModel.restartApp() }) { Text("Restart now") }
+                }
+                Button(
+                    onClick = { viewModel.runGpuSelfTest() },
+                    enabled = !uiState.selfTestRunning,
+                ) {
+                    Text(if (uiState.selfTestRunning) "Running GPU self-test…" else "Run GPU self-test")
+                }
+                if (uiState.selfTestReport.isNotEmpty()) {
+                    SelectionContainer {
+                        Text(
+                            uiState.selfTestReport,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        )
+                    }
+                }
             }
             val maxThreads = remember { Runtime.getRuntime().availableProcessors() }
             var threadsValue by remember { mutableFloatStateOf(uiState.numThreads.toFloat()) }

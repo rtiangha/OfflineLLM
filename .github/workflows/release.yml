@@ -35,7 +35,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # tags are needed to work out the version
-          submodules: true # llama.cpp
+          submodules: recursive # llama.cpp + libadrenotools (+ its linkernsbypass)
+
+      # libadrenotools: make ggml-vulkan able to start from a custom (Turnip) driver.
+      - name: Patch ggml-vulkan for libadrenotools
+        run: python3 scripts/patch_ggml_vulkan.py llama.cpp/ggml/src/ggml-vulkan/ggml-vulkan.cpp
 
       - name: Work out version
         id: ver
