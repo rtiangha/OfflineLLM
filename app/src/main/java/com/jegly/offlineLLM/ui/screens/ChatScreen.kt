@@ -105,11 +105,16 @@ fun ChatScreen(
         viewModel.initialize()
     }
 
+    // "At the bottom" means the END of the last item is (almost) on screen. Checking only the
+    // index is not enough: a long streaming reply is one tall item, so its top can be visible
+    // while its end is far below the screen.
     val isAtBottom by remember {
         derivedStateOf {
-            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-            val total = listState.layoutInfo.totalItemsCount
-            lastVisible == null || lastVisible.index >= total - 2
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()
+            lastVisible == null ||
+                (lastVisible.index >= info.totalItemsCount - 1 &&
+                    lastVisible.offset + lastVisible.size <= info.viewportEndOffset + 160)
         }
     }
 
@@ -129,11 +134,16 @@ fun ChatScreen(
         }
     }
 
-    LaunchedEffect(uiState.messages.size, uiState.partialResponse) {
+    // Follow the generation: keep the END of the last item in view. scrollToItem(index) alone
+    // aligns the item's top edge with the top of the screen, so a reply taller than the screen
+    // is never followed, and when the streaming item is swapped for the saved message the view
+    // lands on the start of that message. A huge scrollOffset is clamped by the list so the last
+    // item's bottom edge sits at the bottom of the screen.
+    LaunchedEffect(uiState.messages.size, uiState.partialResponse, uiState.isGenerating) {
         if (autoScrollEnabled) {
             val totalItems = uiState.messages.size + (if (uiState.isGenerating) 1 else 0)
             if (totalItems > 0) {
-                listState.scrollToItem(totalItems - 1)
+                listState.scrollToItem(totalItems - 1, Int.MAX_VALUE)
             }
         }
     }
@@ -354,7 +364,7 @@ fun ChatScreen(
                     }
 
                     if (uiState.isGenerating) {
-                        item {
+                        item(key = "streaming") {
                             if (uiState.partialResponse.isNotEmpty()) {
                                 StreamingMessage(partialResponse = uiState.partialResponse)
                             } else {
