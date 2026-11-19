@@ -26,6 +26,12 @@ jobs:
         with:
           submodules: recursive # llama.cpp + libadrenotools (+ its linkernsbypass)
 
+      - name: Maximize build space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
+          df -h /
+
       - name: Upgrade system gcc
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
@@ -39,6 +45,12 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+
+      - name: Set up the Hexagon SDK
+        uses: ./.github/actions/setup-hexagon-sdk
+
+      - name: Set up ccache
+        uses: ./.github/actions/setup-ccache
 
       # NDK version is read from smollm/build.gradle.kts so it stays in sync.
       # Khronos headers for llama.cpp's Vulkan backend (see README, "Build from source"):
